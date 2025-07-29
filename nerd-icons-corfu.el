@@ -101,8 +101,7 @@
     (type-parameter :style "cod" :icon "list_unordered" :face font-lock-type-face)
     (unit :style "cod" :icon "symbol_ruler" :face font-lock-constant-face)
     (value :style "cod" :icon "symbol_field" :face font-lock-builtin-face)
-    (variable :style "cod" :icon "symbol_variable" :face font-lock-variable-name-face)
-    (t :style "cod" :icon "code" :face font-lock-warning-face))
+    (variable :style "cod" :icon "symbol_variable" :face font-lock-variable-name-face))
   "Mapping of completion kinds to icons.
 
 There are two possible types for the values of this alist, static icon
@@ -120,24 +119,43 @@ those available in Nerd Fonts.  ICON-NAME is a string with the name of the icon.
 FACE, if present, is applied to the icon, mainly for its color.
 
 In case of more complex customizations that need to know the completion
-candidate itself, one can use a mapping like (KIND ICON-FN), and ICON-FN will be
-called with the candidate to return the icon."
+candidate itself, one can use a mapping like (KIND :fn ICON-FN [:face FACE]),
+and ICON-FN will be called with the candidate to return the icon. In this case,
+if FACE is present, it will be added to the returned icon unconditionally. Thus,
+if the face depends on the candidate as well, FACE should be absent and ICON-FN
+should return a propertized string.
+
+In previous versions of this package, a mapping for KIND t was required to be
+present in the list, but it's been made optional, and removed from the default
+value. When absent, kinds that match no entry will default to a ? symbol.  If
+you encounter ? as the icon, it's likely either your completion provider doesn't
+set a `:company-kind' property or you need to add an entry to this list. If you
+add a mapping for t, then ? will never be shown, and whatever you set as the
+icon for that becomes an indication of missing KIND entries."
   :type '(alist :key-type symbol :value-type (choice nerd-icons-corfu-icon-type nerd-icons-corfu-function-type))
   :group 'nerd-icons-corfu)
 
-(defun nerd-icons-corfu--get-by-kind (kind)
-  "Returns the icon glyph for kind KIND.
+(defun nerd-icons-corfu--get-by-kind (kind cand)
+  "Returns the icon glyph for kind KIND, possibly checking CAND.
 
 The mapping of kind -> icon is defined by the user in
-`nerd-icons-corfu-mapping'."
+`nerd-icons-corfu-mapping'. CAND is used if the mapping for the selected KIND is
+dynamic (has an `:fn' property)."
   (let* ((icon-entry (or (alist-get (or kind t) nerd-icons-corfu-mapping)
                          (alist-get t nerd-icons-corfu-mapping)))
-         (style (plist-get icon-entry :style))
-         (icon (plist-get icon-entry :icon))
-         (icon-fun (intern (concat "nerd-icons-" style "icon")))
-         (icon-name (concat "nf-" style "-" icon))
          (face (plist-get icon-entry :face)))
-    (or (and (fboundp icon-fun) (funcall icon-fun icon-name :face face)) "?")))
+    (or (and-let* ((fn (plist-get icon-entry :fn))
+                   (icon (funcall fn cand))
+                   (icon-with-face (propertize icon 'face face))))
+        (and-let* ((style (plist-get icon-entry :style))
+                   (icon (plist-get icon-entry :icon))
+                   (icon-fn (intern (concat "nerd-icons-" style "icon")))
+                   (icon-name (concat "nf-" style "-" icon))
+                   ((fboundp icon-fn))
+                   ((funcall icon-fn icon-name :face face))))
+        (and-let* ((face)
+                   ((propertize "?" 'face face))))
+        "?")))
 
 (defun nerd-icons-corfu--eval-space ()
   "Evaluate which space (full or half-width) should be used."
@@ -167,10 +185,7 @@ and returns the icon."
   (and-let* ((kindfunc (plist-get completion-extra-properties :company-kind)))
     (lambda (cand)
       (let* ((kind (funcall kindfunc cand))
-             (glyph (if-let* ((args (alist-get kind nerd-icons-corfu-mapping))
-                              (fn (plist-get args :fn)))
-                        (funcall fn (substring-no-properties cand))
-                      (nerd-icons-corfu--get-by-kind kind))))
+             (glyph (nerd-icons-corfu--get-by-kind kind cand)))
         (concat
          (and (display-graphic-p) nerd-icons-corfu--space)
          glyph
